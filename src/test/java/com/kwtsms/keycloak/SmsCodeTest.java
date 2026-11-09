@@ -40,30 +40,49 @@ class SmsCodeTest {
         assertThrows(IllegalArgumentException.class, () -> SmsCode.generate(0));
     }
 
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K5, K7): keyed HMAC instead of plain SHA-256, and a length limit.
+    private static final byte[] KEY = "test-key".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
     @Test
-    void hashIsSha256Hex() {
-        // SHA-256("123456"), known value
-        assertEquals("8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", SmsCode.hash("123456"));
+    void hashIsHmacSha256Hex() {
+        // HMAC-SHA256(key "test-key", "123456"), known value (python3 hmac)
+        assertEquals("3208c5c65614f51aab0ffa05bfd314e635f567d7873e42e1e660787eec2b7f2d", SmsCode.hash(KEY, "123456"));
+        assertThrows(IllegalArgumentException.class, () -> SmsCode.hash(new byte[0], "123456"));
+    }
+
+    @Test
+    void anotherKeyGivesAnotherHash() {
+        assertNotEquals(SmsCode.hash(KEY, "123456"), SmsCode.hash("other".getBytes(), "123456"));
+        assertFalse(SmsCode.matches("123456", SmsCode.hash(KEY, "123456"), "other".getBytes(), 6));
+        assertFalse(SmsCode.matches("123456", SmsCode.hash(KEY, "123456"), null, 6));
     }
 
     @Test
     void matchesOnlyTheRightCode() {
-        String h = SmsCode.hash("042917");
-        assertTrue(SmsCode.matches("042917", h));
-        assertTrue(SmsCode.matches(" 042917 ", h));
-        assertFalse(SmsCode.matches("42917", h));
-        assertFalse(SmsCode.matches("042918", h));
-        assertFalse(SmsCode.matches("", h));
-        assertFalse(SmsCode.matches(null, h));
-        assertFalse(SmsCode.matches("042917", null));
-        assertFalse(SmsCode.matches("042917", ""));
+        String h = SmsCode.hash(KEY, "042917");
+        assertTrue(SmsCode.matches("042917", h, KEY, 6));
+        assertTrue(SmsCode.matches(" 042917 ", h, KEY, 6));
+        assertFalse(SmsCode.matches("42917", h, KEY, 6));
+        assertFalse(SmsCode.matches("042918", h, KEY, 6));
+        assertFalse(SmsCode.matches("", h, KEY, 6));
+        assertFalse(SmsCode.matches(null, h, KEY, 6));
+        assertFalse(SmsCode.matches("042917", null, KEY, 6));
+        assertFalse(SmsCode.matches("042917", "", KEY, 6));
+    }
+
+    @Test
+    void inputLongerThanTheCodeIsRejected() {
+        String h = SmsCode.hash(KEY, "042917");
+        assertFalse(SmsCode.matches("0429170", h, KEY, 6));
+        assertFalse(SmsCode.matches("9".repeat(100_000), h, KEY, 6));
+        assertTrue(SmsCode.matches("   042917   ", h, KEY, 6));
     }
 
     @Test
     void acceptsArabicAndPersianDigits() {
-        String h = SmsCode.hash("042917");
-        assertTrue(SmsCode.matches("\u0660\u0664\u0662\u0669\u0661\u0667", h));
-        assertTrue(SmsCode.matches("\u06F0\u06F4\u06F2\u06F9\u06F1\u06F7", h));
+        String h = SmsCode.hash(KEY, "042917");
+        assertTrue(SmsCode.matches("\u0660\u0664\u0662\u0669\u0661\u0667", h, KEY, 6));
+        assertTrue(SmsCode.matches("\u06F0\u06F4\u06F2\u06F9\u06F1\u06F7", h, KEY, 6));
     }
 
     @Test

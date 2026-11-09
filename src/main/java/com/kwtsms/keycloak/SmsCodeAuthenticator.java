@@ -10,7 +10,8 @@
  * USAGE:     Created by SmsCodeAuthenticatorFactory; added by an admin to a browser flow after the Username
  *            Password Form. Form fields: "kwtsms_code" (the code) and "resend" (button).
  * DEPENDS:   Keycloak 26.x server SPI (provided by the server), KwtsmsSender, StepSettings, SmsCode, HourlyCap,
- *            PhoneRules, MessageTemplate; template theme-resources/templates/kwtsms-sms-code.ftl.
+ *            PhoneRules, MessageTemplate; template theme-resources/templates/kwtsms-sms-code.ftl;
+ *            KeycloakSession.singleUseObjects() for the hourly caps (2026-11-09 23:37 +03, onyx-fixes #1176).
  */
 package com.kwtsms.keycloak;
 
@@ -28,9 +29,11 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
-import java.util.List;
+import org.keycloak.models.SingleUseObjectProvider;
+
+import java.util.Collections;
 import java.util.Locale;
-import java.util.stream.Collectors;
+import java.util.Map;
 
 public class SmsCodeAuthenticator implements Authenticator {
 
@@ -130,7 +133,9 @@ public class SmsCodeAuthenticator implements Authenticator {
             return;
         }
 
-        if (SmsCode.matches(params.getFirst(FIELD_CODE), hash)) {
+        // 2026-11-09 23:37 +03 (onyx-fixes #1176, K5, K7): keyed hash, and input longer than the code is rejected.
+        byte[] key = sender == null || !sender.hasCredentials() ? null : sender.codeKey();
+        if (SmsCode.matches(params.getFirst(FIELD_CODE), hash, key, s.codeLength)) {
             clearCode(auth);
             auth.removeAuthNote(NOTE_ATTEMPTS);
             context.getEvent().detail("kwtsms_result", "verified");
@@ -174,8 +179,10 @@ public class SmsCodeAuthenticator implements Authenticator {
         context.getEvent().detail("kwtsms_number", PhoneRules.mask(number));
         if (!PhoneRules.allowed(number, s.allowedCountryCodes)) return "country_not_allowed";
 
-        List<Long> recent = HourlyCap.trim(user.getAttributeStream(HourlyCap.ATTRIBUTE).collect(Collectors.toList()), now);
-        if (!HourlyCap.allowed(recent, s.maxPerHour)) return "hourly_cap";
+        // 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3): caps live in server-side storage, not in a user
+        // attribute; a slot is claimed atomically BEFORE the send, so parallel logins cannot pass together.
+        String capped = takeSlots(context.getSession(), realm, user, s, now);
+        if (capped != null) return capped;
 
         String code = SmsCode.generate(s.codeLength);
         Locale locale = context.getSession().getContext().resolveLocale(user);
@@ -193,18 +200,11 @@ public class SmsCodeAuthenticator implements Authenticator {
         }
 
         AuthenticationSessionModel auth = context.getAuthenticationSession();
-        auth.setAuthNote(NOTE_HASH, SmsCode.hash(code));
+        auth.setAuthNote(NOTE_HASH, SmsCode.hash(sender.codeKey(), code)); // 2026-11-09 23:37 +03 (onyx-fixes #1176, K5)
         auth.setAuthNote(NOTE_EXPIRES, Long.toString(now + s.ttlSeconds));
         auth.setAuthNote(NOTE_SENT, Long.toString(now));
-
-        recent.add(now);
-        try {
-            user.setAttribute(HourlyCap.ATTRIBUTE, HourlyCap.toStrings(recent));
-        } catch (RuntimeException e) {
-            // Read-only user storage (for example LDAP): the resend wait and attempt limit still apply.
-            LOG.warnf("kwtSMS SMS code: could not store the hourly counter for user=%s (%s)", user.getId(),
-                    e.getClass().getSimpleName());
-        }
+        // 2026-11-09 23:37 +03 (onyx-fixes #1176, K1): the user attribute write (kwtsms_sms_sent) is gone; the slot
+        // was taken in takeSlots before the send.
 
         context.getEvent().detail("kwtsms_result", "sent").detail("kwtsms_test_mode", Boolean.toString(s.testMode));
         if (r.msgId != null) context.getEvent().detail("kwtsms_msg_id", r.msgId);
@@ -213,15 +213,71 @@ public class SmsCodeAuthenticator implements Authenticator {
         return null;
     }
 
-    /** One generic message for every send problem (no account enumeration); the reason goes to logs and events. */
+    /**
+     * Claim one per-user slot, then one realm slot, of the current clock hour. Returns null when both are taken
+     * for this SMS, or a reason. Fails closed: if the store is missing or throws, no SMS is sent.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3).
+     */
+    static String takeSlots(KeycloakSession session, RealmModel realm, UserModel user, StepSettings s, long now) {
+        try {
+            HourlyCap.Store store = store(session.singleUseObjects());
+            if (!HourlyCap.tryTake(store, HourlyCap.userScope(realm.getId(), user.getId()), s.maxPerHour, now)) {
+                return "user_hourly_cap";
+            }
+            if (!HourlyCap.tryTake(store, HourlyCap.realmScope(realm.getId()), s.maxPerRealmHour, now)) {
+                LOG.errorf("kwtSMS SMS code: realm hourly SMS ceiling (%d) reached, realm=%s; no more codes until "
+                        + "the hour ends (%d s)", s.maxPerRealmHour, realm.getName(), HourlyCap.secondsLeft(now));
+                return "realm_hourly_cap";
+            }
+            return null;
+        } catch (RuntimeException e) {
+            LOG.warnf("kwtSMS SMS code: SMS counter unavailable, realm=%s user=%s (%s); failing closed",
+                    realm.getName(), user.getId(), e.getClass().getSimpleName());
+            return "counter_unavailable";
+        }
+    }
+
+    /**
+     * Keycloak's SingleUseObjectProvider as the cap store: users cannot read or edit it, it does not touch user
+     * storage (works for LDAP and other federated users), and on Infinispan putIfAbsent is a single cluster-wide
+     * operation. Keys never end in ".revoked", so the revoked-token persister is never involved.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2).
+     */
+    static HourlyCap.Store store(SingleUseObjectProvider p) {
+        if (p == null) throw new IllegalStateException("no SingleUseObjectProvider");
+        return new HourlyCap.Store() {
+            @Override
+            public boolean claim(String key, long lifespanSeconds) {
+                return p.putIfAbsent(key, lifespanSeconds);
+            }
+
+            @Override
+            public String read(String key) {
+                Map<String, String> m = p.get(key);
+                return m == null ? null : m.get("n");
+            }
+
+            @Override
+            public void write(String key, String value, long lifespanSeconds) {
+                p.put(key, lifespanSeconds, Collections.singletonMap("n", value));
+            }
+        };
+    }
+
+    /**
+     * One generic message for every send problem (no account enumeration); the reason goes to logs and events.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): a soft stop. It used to be failure(), which Keycloak counts as a
+     * failed login for brute-force detection, so someone with a stolen password could get the real user locked
+     * out. Now it is a challenge: the error page is shown, nothing is counted, and the step is tried again on the
+     * next request (a capped user can log in once the hour ends, never later). Wrong codes still count.
+     */
     private void failClosed(AuthenticationFlowContext context, String reason) {
-        // failure() with a response does not write an error event itself (DefaultAuthenticationFlow), so write it here.
+        // A challenge does not write an error event itself, so write it here.
         context.getEvent().user(context.getUser()).detail("kwtsms_result", "failed").detail("kwtsms_reason", reason)
                 .error(Errors.GENERIC_AUTHENTICATION_ERROR);
         LOG.warnf("kwtSMS SMS code: failed closed, realm=%s user=%s reason=%s", context.getRealm().getName(),
                 context.getUser() == null ? "(none)" : context.getUser().getId(), reason);
-        context.failure(AuthenticationFlowError.INTERNAL_ERROR,
-                context.form().setError(MSG_SEND_FAILED).createErrorPage(Response.Status.BAD_REQUEST));
+        context.challenge(context.form().setError(MSG_SEND_FAILED).createErrorPage(Response.Status.BAD_REQUEST));
     }
 
     private LoginFormsProvider form(AuthenticationFlowContext context, StepSettings s) {

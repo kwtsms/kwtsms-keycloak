@@ -65,12 +65,28 @@ class StepSettingsTest {
         assertEquals("MY-SENDER", s.senderId);
     }
 
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K4): "*" no longer allows every country.
     @Test
-    void starAllowsEveryCountryButBlankKeepsTheDefault() {
+    void starAllowsNoCountryButBlankKeepsTheDefault() {
         Map<String, String> c = new HashMap<>();
         c.put(StepSettings.ALLOWED_COUNTRY_CODES, "*");
-        assertTrue(StepSettings.from(c).allowedCountryCodes.isEmpty());
+        StepSettings s = StepSettings.from(c);
+        assertTrue(s.allowedCountryCodes.isEmpty());
+        assertFalse(PhoneRules.allowed("96550000001", s.allowedCountryCodes));
         c.put(StepSettings.ALLOWED_COUNTRY_CODES, "");
         assertEquals(List.of("965"), StepSettings.from(c).allowedCountryCodes);
+    }
+
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): realm-wide ceiling, default 200, clamped 1 to 10000.
+    @Test
+    void realmCeilingDefaultAndClamp() {
+        assertEquals(200, StepSettings.from(null).maxPerRealmHour);
+        Map<String, String> c = new HashMap<>();
+        c.put(StepSettings.MAX_PER_REALM_HOUR, "0");
+        assertEquals(1, StepSettings.from(c).maxPerRealmHour);
+        c.put(StepSettings.MAX_PER_REALM_HOUR, "99999999");
+        assertEquals(10000, StepSettings.from(c).maxPerRealmHour);
+        c.put(StepSettings.MAX_PER_REALM_HOUR, "lots");
+        assertEquals(200, StepSettings.from(c).maxPerRealmHour);
     }
 }

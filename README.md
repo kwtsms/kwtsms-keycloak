@@ -26,7 +26,9 @@ free API testing and credits that do not expire.
 
 **Security**
 - Random codes, kept only as a hash, single use, with a lifetime you set.
-- Limits: wrong-code attempts per login, resend wait, SMS per user per hour, allowed country codes.
+- Limits: wrong-code attempts per login, resend wait, SMS per user per hour, SMS per realm per hour, allowed
+  country codes. The hourly counts are kept on the Keycloak server (shared by all nodes of a cluster), not on the
+  user, so they also work for LDAP and other read-only user stores and users cannot reset them.
 - One general message to the user for every sending problem; the reason is written to the server log and to
   Keycloak events, with the mobile number masked.
 - The kwtSMS API password is set on the server, never in the admin console.
@@ -74,17 +76,28 @@ spi-authenticator--kwtsms-sms-code--password=YOUR_API_PASSWORD
 
 If they are missing, the server log says so at start and the step refuses every login it is part of.
 
+Prefer the environment variables or `keycloak.conf` (readable only by the Keycloak user): a password on the command
+line can be seen in the process list. Use the same values on every node of a cluster.
+
 ### 2. The phone number of each user
 
 Each user needs a mobile number in a user attribute (default `phone_number`). In Keycloak 26 add the attribute in
 **Realm settings > User profile** (or map it from LDAP), then fill it in for your users. Local numbers of 8 digits
 or fewer get the default country code (`965`); numbers with `+` or `00` are used as they are.
 
+**Important: only administrators may change the phone number.** The code goes to whatever number is stored, so a
+user (or anyone who has their password) who can edit it can send the code to another phone. In
+**Realm settings > User profile > Attributes**, open the phone attribute and under **Permission** set
+**Who can edit** to **Admin** only (users may stay in **Who can view**). Keep **Realm settings > General >
+Unmanaged Attributes** on **Disabled** (the default) or **Admin can edit**, never **Enabled**, and do not put the
+phone attribute on the registration form. For LDAP, map it read-only from the directory.
+
 ### 3. The login flow
 
 1. Go to **Authentication**, open the **browser** flow and choose **Duplicate**.
 2. In the copy, find the step group that holds **Username Password Form** and click **Add step** there.
-3. Choose **kwtSMS SMS code**, place it after **Username Password Form** and set it to **Required**.
+3. Choose **kwtSMS SMS code**, place it after **Username Password Form** and set it to **Required** (the step
+   offers only Required and Disabled).
 4. Click the gear icon of the new step and fill in the settings (below). The Sender ID is required.
 5. Use **Bind flow** on your copy and choose **Browser flow**.
 
@@ -95,15 +108,30 @@ or fewer get the default country code (`965`); numbers with `+` or `00` are used
 | Sender ID | (empty) | Required. Your Transactional Sender ID. |
 | Phone attribute | `phone_number` | User attribute with the mobile number. |
 | Default country code | `965` | For local numbers. |
-| Allowed country codes | `965` | Comma separated; `*` allows every country (not recommended). |
+| Allowed country codes | `965` | Comma separated, for example `965, 966`. There is no "all countries" value. |
 | Code length | 6 | 4 to 10 digits. |
 | Code lifetime (seconds) | 300 | 60 to 3600. |
 | Resend wait (seconds) | 180 | 30 to 3600. |
 | Max attempts | 5 | Wrong codes per login before the login fails. |
-| Max SMS per user per hour | 5 | 1 to 50. |
+| Max SMS per user per hour | 5 | 1 to 50, per clock hour. |
+| Max SMS per realm per hour | 200 | 1 to 10000, all users together, per clock hour. |
 | Test mode | off | Messages are queued, not delivered. |
 | SMS template (English) | `Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.` | |
 | SMS template (Arabic) | `رمز التحقق لدخول {realm}: {code}، صالح لمدة {ttl_minutes} دقائق.` | Used for users whose language is Arabic. |
+
+### Limits and stolen passwords
+
+The SMS is sent after the password is accepted, so anyone who has a user's password can make Keycloak send that
+user a code. The limits keep this small:
+
+- **Per user:** after the hourly limit the user sees the general message and gets no more codes until the clock
+  hour ends; they are never held back longer than that, and these stops do not count as failed logins.
+- **Per realm:** when the realm limit is reached nobody gets a code until the hour ends, and the server log says
+  so. Set it a little above your busiest real hour.
+- **Wrong codes** count as failed logins. Turn on **Realm settings > Security Defenses > Brute Force Detection**
+  so that password guessing and code guessing lock the account the way you choose.
+
+Turn on brute force detection in every realm that uses this step.
 
 ### Test mode
 
@@ -129,7 +157,8 @@ settings.
 
 **A user says the code never came.** The user sees one general message on purpose. Look in the Keycloak server log
 for `kwtSMS SMS code` and in the login events for the `kwtsms_reason` and `kwtsms_error` details: no phone number,
-a number outside the allowed country codes, the hourly limit, or a kwtSMS error code.
+a number outside the allowed country codes, the hourly limit for the user (`user_hourly_cap`) or the realm
+(`realm_hourly_cap`), or a kwtSMS error code.
 
 ## Changelog
 

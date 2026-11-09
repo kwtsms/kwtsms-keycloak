@@ -8,7 +8,7 @@
  * WHY:       Same normalization and country rules as every kwtSMS library (kwtsms-java PhoneUtils, bundled and
  *            relocated), plus a country allowlist against toll fraud, and no full number in any log.
  * USAGE:     String n = PhoneRules.resolve(raw, "965"); if (n != null && PhoneRules.allowed(n, list)) ...
- *            PhoneRules.mask(n)  // 96550000001 becomes 96550****01
+ *            PhoneRules.mask(n)  // 96550000001 becomes 965******01 (2026-11-09 23:37 +03, onyx-fixes #1176, K8)
  * DEPENDS:   com.kwtsms.PhoneUtils (kwtsms-java 0.5.0, relocated to com.kwtsms.keycloak.lib in the jar).
  */
 package com.kwtsms.keycloak;
@@ -43,21 +43,28 @@ public final class PhoneRules {
         return vr.isValid() ? vr.getNormalized() : null;
     }
 
-    /** True when the number starts with one of the allowed country codes; an empty list allows every code. */
+    /**
+     * True when the number starts with one of the allowed country codes.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K4): an empty or missing list now allows nothing (it used to allow
+     * every country, which made SMS pumping to costly destinations one setting away).
+     */
     public static boolean allowed(String normalized, List<String> allowedCodes) {
         if (normalized == null) return false;
-        if (allowedCodes == null || allowedCodes.isEmpty()) return true;
+        if (allowedCodes == null || allowedCodes.isEmpty()) return false;
         for (String cc : allowedCodes) {
             if (!cc.isEmpty() && normalized.startsWith(cc)) return true;
         }
         return false;
     }
 
-    /** Keep the first 5 and last 2 digits, star the rest; numbers shorter than 8 digits are fully starred. */
+    /**
+     * Keep the first 3 and last 2 digits, star the rest; numbers shorter than 8 digits are fully starred.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K8): was first 5, which left only 4 hidden digits of a Kuwait number.
+     */
     public static String mask(String number) {
         if (number == null || number.isEmpty()) return "(none)";
         int len = number.length();
         if (len < 8) return "*".repeat(len);
-        return number.substring(0, 5) + "*".repeat(len - 7) + number.substring(len - 2);
+        return number.substring(0, 3) + "*".repeat(len - 5) + number.substring(len - 2);
     }
 }

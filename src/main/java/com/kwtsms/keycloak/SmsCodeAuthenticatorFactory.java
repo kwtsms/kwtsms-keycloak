@@ -37,9 +37,10 @@ public class SmsCodeAuthenticatorFactory implements AuthenticatorFactory {
 
     private static final Logger LOG = Logger.getLogger(SmsCodeAuthenticatorFactory.class);
 
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K11): ALTERNATIVE removed. Next to other factors it made SMS the
+    // weakest choice, and a user without a phone failed instead of being skipped. Use Required after the password.
     private static final AuthenticationExecutionModel.Requirement[] REQUIREMENTS = {
             AuthenticationExecutionModel.Requirement.REQUIRED,
-            AuthenticationExecutionModel.Requirement.ALTERNATIVE,
             AuthenticationExecutionModel.Requirement.DISABLED
     };
 
@@ -55,8 +56,9 @@ public class SmsCodeAuthenticatorFactory implements AuthenticatorFactory {
             .helpText("Added in front of local numbers of 8 digits or fewer written without + or 00.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(StepSettings.DEF_COUNTRY_CODE).add()
             .property().name(StepSettings.ALLOWED_COUNTRY_CODES).label("Allowed country codes")
-            .helpText("Comma separated. Codes are sent only to numbers that start with one of these. "
-                    + "* allows every country (not recommended: SMS to some countries is costly and a fraud target).")
+            // 2026-11-09 23:37 +03 (onyx-fixes #1176, K4): no "*" any more; an explicit list is required.
+            .helpText("Comma separated, for example 965 or 965, 966. Codes are sent only to numbers that start with "
+                    + "one of these. There is no 'all countries' value: an empty list sends no codes.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(StepSettings.DEF_ALLOWED).add()
             .property().name(StepSettings.CODE_LENGTH).label("Code length")
             .helpText("Digits in the SMS code, 4 to 10.")
@@ -71,8 +73,15 @@ public class SmsCodeAuthenticatorFactory implements AuthenticatorFactory {
             .helpText("Wrong codes allowed in one login before the login fails, 1 to 10.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_ATTEMPTS)).add()
             .property().name(StepSettings.MAX_PER_HOUR).label("Max SMS per user per hour")
-            .helpText("SMS codes one user can receive in any hour, 1 to 50.")
+            // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): counted per clock hour in server storage.
+            .helpText("SMS codes one user can receive in one clock hour, 1 to 50. A user who reaches it can log in "
+                    + "again when the hour ends.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_PER_HOUR)).add()
+            // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): realm-wide ceiling against cost from many stolen passwords.
+            .property().name(StepSettings.MAX_PER_REALM_HOUR).label("Max SMS per realm per hour")
+            .helpText("SMS codes the whole realm can send in one clock hour, all users together, 1 to 10000. "
+                    + "When it is reached nobody gets a code until the hour ends; the server log says so.")
+            .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_PER_REALM_HOUR)).add()
             .property().name(StepSettings.TEST_MODE).label("Test mode")
             .helpText("Warning: in test mode messages are NOT delivered, so users cannot log in. kwtSMS queues "
                     + "them and holds their credits until you delete them from the Sending Queue. For testing only.")

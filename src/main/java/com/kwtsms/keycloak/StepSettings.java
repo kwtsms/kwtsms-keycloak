@@ -27,6 +27,8 @@ public final class StepSettings {
     public static final String RESEND_WAIT = "kwtsms.resend.wait.seconds";
     public static final String MAX_ATTEMPTS = "kwtsms.max.attempts";
     public static final String MAX_PER_HOUR = "kwtsms.max.sms.per.hour";
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): realm-wide ceiling of SMS codes per clock hour, all users together.
+    public static final String MAX_PER_REALM_HOUR = "kwtsms.max.sms.per.realm.hour";
     public static final String TEST_MODE = "kwtsms.test.mode";
     public static final String TEMPLATE_EN = "kwtsms.template.en";
     public static final String TEMPLATE_AR = "kwtsms.template.ar";
@@ -40,6 +42,7 @@ public final class StepSettings {
     public static final int DEF_RESEND_WAIT = 180;
     public static final int DEF_MAX_ATTEMPTS = 5;
     public static final int DEF_MAX_PER_HOUR = 5;
+    public static final int DEF_MAX_PER_REALM_HOUR = 200; // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3)
     public static final String DEF_TEMPLATE_EN = "Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.";
     public static final String DEF_TEMPLATE_AR = "رمز التحقق لدخول {realm}: {code}، صالح لمدة {ttl_minutes} دقائق.";
 
@@ -51,6 +54,7 @@ public final class StepSettings {
     public final int resendWaitSeconds;
     public final int maxAttempts;
     public final int maxPerHour;
+    public final int maxPerRealmHour; // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3)
     public final boolean testMode;
     public final String templateEn;
     public final String templateAr;
@@ -65,6 +69,8 @@ public final class StepSettings {
         resendWaitSeconds = number(c, RESEND_WAIT, DEF_RESEND_WAIT, 30, 3600);
         maxAttempts = number(c, MAX_ATTEMPTS, DEF_MAX_ATTEMPTS, 1, 10);
         maxPerHour = number(c, MAX_PER_HOUR, DEF_MAX_PER_HOUR, 1, 50);
+        // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): 1 to 10000; a typo can lower the ceiling but never remove it.
+        maxPerRealmHour = number(c, MAX_PER_REALM_HOUR, DEF_MAX_PER_REALM_HOUR, 1, 10000);
         testMode = "true".equalsIgnoreCase(text(c, TEST_MODE, "false"));
         templateEn = text(c, TEMPLATE_EN, DEF_TEMPLATE_EN);
         templateAr = text(c, TEMPLATE_AR, DEF_TEMPLATE_AR);
@@ -98,10 +104,13 @@ public final class StepSettings {
         return s == null ? "" : s.replaceAll("[^0-9]", "");
     }
 
-    /** "965, 966" to [965, 966]; "*" gives an empty list, which allows every country code. */
+    /**
+     * "965, 966" to [965, 966]. 2026-11-09 23:37 +03 (onyx-fixes #1176, K4): "*" no longer means every country; it and any
+     * value without digits give an empty list, and an empty list allows no country (the step fails closed).
+     */
     static List<String> list(String s) {
         List<String> out = new ArrayList<>();
-        if (s != null && !"*".equals(s.trim())) {
+        if (s != null) {
             for (String p : s.split("[,\\s]+")) {
                 String d = digits(p);
                 if (!d.isEmpty()) out.add(d);

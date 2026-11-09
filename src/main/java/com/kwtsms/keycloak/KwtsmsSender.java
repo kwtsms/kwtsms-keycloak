@@ -15,6 +15,10 @@ package com.kwtsms.keycloak;
 import com.kwtsms.KwtSMS;
 import com.kwtsms.SendResult;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
 public class KwtsmsSender {
 
     /** Sent before the library token in the User-Agent so kwtSMS can count requests per integration. */
@@ -30,6 +34,25 @@ public class KwtsmsSender {
 
     public boolean hasCredentials() {
         return !username.isEmpty() && !password.isEmpty();
+    }
+
+    /**
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K5): HMAC key for SMS code hashes, SHA-256 of a fixed label plus the
+     * API login. It comes from the server config, so it is the same on every cluster node and is never in the
+     * session store or the database. Never logged. Changing the API password only invalidates codes in flight.
+     */
+    byte[] codeKey() {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update("kwtsms-keycloak code key v1".getBytes(StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(username.getBytes(StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(password.getBytes(StandardCharsets.UTF_8));
+            return md.digest();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 
     /** Never throws: any failure comes back as a Result with ok=false. */

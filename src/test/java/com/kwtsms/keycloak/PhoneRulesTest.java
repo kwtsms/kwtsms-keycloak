@@ -51,15 +51,18 @@ class PhoneRulesTest {
         assertTrue(PhoneRules.allowed("96550000001", List.of("965")));
         assertFalse(PhoneRules.allowed("966500000001", List.of("965")));
         assertTrue(PhoneRules.allowed("966500000001", List.of("965", "966")));
-        assertTrue(PhoneRules.allowed("447700900001", List.of()));
+        // 2026-11-09 23:37 +03 (onyx-fixes #1176, K4): an empty or missing list allows nothing.
+        assertFalse(PhoneRules.allowed("447700900001", List.of()));
+        assertFalse(PhoneRules.allowed("447700900001", null));
         assertFalse(PhoneRules.allowed(null, List.of("965")));
     }
 
+    // 2026-11-09 23:37 +03 (onyx-fixes #1176, K8): first 3 and last 2 digits only.
     @Test
-    void maskKeepsFirstFiveAndLastTwo() {
-        assertEquals("96550****01", PhoneRules.mask("96550000001"));
-        assertEquals("96650*****01", PhoneRules.mask("966500000001"));
-        assertEquals("12345*78", PhoneRules.mask("12345678"));
+    void maskKeepsFirstThreeAndLastTwo() {
+        assertEquals("965******01", PhoneRules.mask("96550000001"));
+        assertEquals("966*******01", PhoneRules.mask("966500000001"));
+        assertEquals("123***78", PhoneRules.mask("12345678"));
         assertEquals("*******", PhoneRules.mask("1234567"));
         assertEquals("(none)", PhoneRules.mask(null));
     }

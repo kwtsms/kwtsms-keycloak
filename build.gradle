@@ -28,6 +28,9 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 17
 }
 
+// 2026-11-09 23:43 +03 (onyx-fixes #1176, K10): every dependency, kwtsms-java from JitPack included, is checked
+// against gradle/verification-metadata.xml (SHA-256). After a dependency change, refresh it with:
+//   ./gradlew --write-verification-metadata sha256 build   and review the diff before committing.
 repositories {
     mavenCentral()
     maven { url = 'https://jitpack.io' }
