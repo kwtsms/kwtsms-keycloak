@@ -1,0 +1,9 @@
+// FILE:      settings.gradle
+// CREATED:   2026-11-09 17:10 +03
+// TASK:      int-new W4
+// AUTHOR:    M Alhassoun
+// WHAT:      Gradle project name.
+// WHY:       Names the build output kwtsms-keycloak-<version>.jar.
+// USAGE:     Read by ./gradlew.
+// DEPENDS:   Gradle 9.9 wrapper.
+rootProject.name = 'kwtsms-keycloak'

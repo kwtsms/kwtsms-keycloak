@@ -1,0 +1,68 @@
+// FILE:      build.gradle
+// CREATED:   2026-11-09 17:10 +03
+// TASK:      int-new W4
+// AUTHOR:    M Alhassoun
+// WHAT:      Builds the kwtSMS Keycloak provider as ONE jar: our classes plus kwtsms-java relocated to
+//            com.kwtsms.keycloak.lib, Keycloak APIs compileOnly (never inside the jar).
+// WHY:       Admins drop one file into providers/; relocation avoids a split package if another provider also
+//            ships kwtsms-java (Keycloak loads provider jars in one classloader).
+// USAGE:     ./gradlew build   (tests, then build/libs/kwtsms-keycloak-<version>.jar)
+// DEPENDS:   JDK 17+, Gradle wrapper 9.9.0, Maven Central (Keycloak 26.8.2), JitPack (kwtsms-java 0.5.0),
+//            Gradle plugin portal (com.gradleup.shadow).
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.6.1'
+}
+
+group = 'com.kwtsms'
+version = '0.1.0'
+
+def keycloakVersion = '26.8.2'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://jitpack.io' }
+}
+
+dependencies {
+    compileOnly "org.keycloak:keycloak-server-spi:${keycloakVersion}"
+    compileOnly "org.keycloak:keycloak-server-spi-private:${keycloakVersion}"
+    compileOnly "org.keycloak:keycloak-services:${keycloakVersion}"
+    // kwtsms-java has no runtime dependencies; it is bundled and relocated by shadowJar.
+    implementation 'com.github.boxlinknet:kwtsms-java:0.5.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging { events 'passed', 'skipped', 'failed' }
+}
+
+tasks.named('shadowJar') {
+    archiveClassifier.set('')
+    // Only kwtsms-java goes in; Keycloak and its transitive deps are compileOnly and never on this classpath.
+    configurations = [project.configurations.runtimeClasspath]
+    relocate('com.kwtsms', 'com.kwtsms.keycloak.lib') {
+        exclude 'com.kwtsms.keycloak.**'
+    }
+    // Drop the library's own build metadata; our MANIFEST stays.
+    exclude 'META-INF/maven/**'
+    manifest {
+        attributes('Implementation-Title': 'kwtsms-keycloak', 'Implementation-Version': project.version)
+    }
+}
+
+// The plain jar would sit next to the shadow jar with the same name; disable it so build/libs has ONE jar.
+tasks.named('jar') { enabled = false }
+tasks.named('assemble') { dependsOn tasks.named('shadowJar') }

@@ -1,0 +1,9 @@
+# FILE:      src/main/resources/META-INF/services/org.keycloak.authentication.AuthenticatorFactory
+# CREATED:   2026-11-09 17:13 +03
+# TASK:      int-new W4
+# AUTHOR:    M Alhassoun
+# WHAT:      Registers the kwtSMS SMS code authenticator factory with Keycloak.
+# WHY:       Keycloak discovers providers through Java ServiceLoader files in META-INF/services.
+# USAGE:     Read by Keycloak at kc.sh build / start.
+# DEPENDS:   com.kwtsms.keycloak.SmsCodeAuthenticatorFactory.
+com.kwtsms.keycloak.SmsCodeAuthenticatorFactory

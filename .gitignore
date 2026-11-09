@@ -1,0 +1,19 @@
+# FILE:      .gitignore
+# CREATED:   2026-11-09 17:13 +03
+# TASK:      int-new W4
+# AUTHOR:    M Alhassoun
+# WHAT:      Files that never go into this repository.
+# WHY:       Build output, local secrets and internal notes stay out of the public repo.
+# USAGE:     Read by git.
+# DEPENDS:   none.
+build/
+.gradle/
+.env*
+*.log
+CLAUDE.md
+.claude/
+docs/
+.remember/
+napkin.md
+.idea/
+*.iml
