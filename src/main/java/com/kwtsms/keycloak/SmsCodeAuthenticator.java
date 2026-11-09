@@ -12,6 +12,7 @@
  * DEPENDS:   Keycloak 26.x server SPI (provided by the server), KwtsmsSender, StepSettings, SmsCode, HourlyCap,
  *            PhoneRules, MessageTemplate; template theme-resources/templates/kwtsms-sms-code.ftl;
  *            KeycloakSession.singleUseObjects() for the hourly caps (2026-11-09 23:37 +03, onyx-fixes #1176).
+ *            2026-11-09 23:53 +03 (onyx-fixes #1176, N1): the client IP from context.getConnection() for the per-IP throttle.
  */
 package com.kwtsms.keycloak;
 
@@ -31,7 +32,9 @@ import org.keycloak.sessions.AuthenticationSessionModel;
 
 import org.keycloak.models.SingleUseObjectProvider;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -57,6 +60,9 @@ public class SmsCodeAuthenticator implements Authenticator {
     static final String MSG_RESEND_WAIT = "kwtsmsResendWait";
     static final String MSG_RESENT = "kwtsmsCodeResent";
 
+    /** 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): fixed text of the error line to alert on; documented in README. Never change it. */
+    static final String REALM_CEILING_LOG = "kwtSMS SMS code: realm SMS ceiling reached";
+
     private final KwtsmsSender sender;
 
     public SmsCodeAuthenticator(KwtsmsSender sender) {
@@ -73,14 +79,12 @@ public class SmsCodeAuthenticator implements Authenticator {
         }
         long now = now();
         String hash = auth.getAuthNote(NOTE_HASH);
-        if (hash != null) {
-            boolean expired = SmsCode.isExpired(now, longNote(auth, NOTE_EXPIRES));
-            long waitLeft = SmsCode.resendWaitLeft(now, longNote(auth, NOTE_SENT), s.resendWaitSeconds);
-            // A page reload must not send another SMS: reuse a live code, or one still inside the resend wait.
-            if (!expired || waitLeft > 0) {
-                context.challenge(form(context, s).createForm(TEMPLATE));
-                return;
-            }
+        // A page reload must not send another SMS: reuse a live code, or one still inside the resend wait.
+        // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): the rule is SmsCode.keepCurrentCode, covered by SmsCodeTest.
+        if (SmsCode.keepCurrentCode(hash != null, now, longNote(auth, NOTE_EXPIRES), longNote(auth, NOTE_SENT),
+                s.resendWaitSeconds)) {
+            context.challenge(form(context, s).createForm(TEMPLATE));
+            return;
         }
         String reason = sendNewCode(context, s, now);
         if (reason != null) {
@@ -181,18 +185,39 @@ public class SmsCodeAuthenticator implements Authenticator {
 
         // 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3): caps live in server-side storage, not in a user
         // attribute; a slot is claimed atomically BEFORE the send, so parallel logins cannot pass together.
-        String capped = takeSlots(context.getSession(), realm, user, s, now);
+        // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): user, then client IP, then realm; the slots taken
+        // are kept in `taken` so they can be given back when no SMS goes out.
+        HourlyCap.Store store;
+        try {
+            store = store(context.getSession().singleUseObjects());
+        } catch (RuntimeException e) {
+            LOG.warnf("kwtSMS SMS code: SMS counter unavailable, realm=%s user=%s (%s); failing closed",
+                    realm.getName(), user.getId(), e.getClass().getSimpleName());
+            return "counter_unavailable";
+        }
+        List<String> taken = new ArrayList<>();
+        String capped = takeSlots(store, realm, user, clientIp(context), s, now, taken);
         if (capped != null) return capped;
 
-        String code = SmsCode.generate(s.codeLength);
-        Locale locale = context.getSession().getContext().resolveLocale(user);
-        String realmName = realm.getDisplayName() != null && !realm.getDisplayName().isEmpty()
-                ? realm.getDisplayName() : realm.getName();
-        String text = MessageTemplate.render(MessageTemplate.pick(locale, s.templateEn, s.templateAr), code,
-                SmsCode.ttlMinutes(s.ttlSeconds), realmName);
-
-        KwtsmsSender.Result r = sender.send(number, text, s.senderId, s.testMode);
+        KwtsmsSender.Result r;
+        String code;
+        try {
+            code = SmsCode.generate(s.codeLength);
+            Locale locale = context.getSession().getContext().resolveLocale(user);
+            String realmName = realm.getDisplayName() != null && !realm.getDisplayName().isEmpty()
+                    ? realm.getDisplayName() : realm.getName();
+            String text = MessageTemplate.render(MessageTemplate.pick(locale, s.templateEn, s.templateAr), code,
+                    SmsCode.ttlMinutes(s.ttlSeconds), realmName);
+            r = sender.send(number, text, s.senderId, s.testMode);
+        } catch (RuntimeException e) {
+            // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): nothing was sent, give the slots back.
+            giveBack(store, taken, now, realm);
+            throw e;
+        }
         if (!r.ok) {
+            // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): a kwtSMS outage must not use up the hour's slots
+            // and lock users out.
+            giveBack(store, taken, now, realm);
             context.getEvent().detail("kwtsms_error", r.errorCode);
             LOG.warnf("kwtSMS SMS code: send failed, realm=%s user=%s number=%s error=%s", realm.getName(),
                     user.getId(), PhoneRules.mask(number), r.errorCode);
@@ -214,26 +239,63 @@ public class SmsCodeAuthenticator implements Authenticator {
     }
 
     /**
-     * Claim one per-user slot, then one realm slot, of the current clock hour. Returns null when both are taken
-     * for this SMS, or a reason. Fails closed: if the store is missing or throws, no SMS is sent.
-     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3).
+     * Claim one per-user slot, one per-client-IP slot and one realm slot of the current clock hour, in that order,
+     * so one address that hits its own limit never reaches the realm ceiling. Returns null when all three are
+     * taken for this SMS (their keys are in {@code taken}), or a reason; on a refusal no slot stays taken.
+     * Fails closed: if the store throws, no SMS is sent.
+     * 2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3); 2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): IP scope, release on refusal,
+     * fixed realm ceiling log text.
      */
-    static String takeSlots(KeycloakSession session, RealmModel realm, UserModel user, StepSettings s, long now) {
+    static String takeSlots(HourlyCap.Store store, RealmModel realm, UserModel user, String ip, StepSettings s,
+                            long now, List<String> taken) {
+        String[] scopes = {HourlyCap.userScope(realm.getId(), user.getId()), HourlyCap.ipScope(realm.getId(), ip),
+                HourlyCap.realmScope(realm.getId())};
+        int[] max = {s.maxPerHour, s.maxPerIpHour, s.maxPerRealmHour};
+        int refused;
         try {
-            HourlyCap.Store store = store(session.singleUseObjects());
-            if (!HourlyCap.tryTake(store, HourlyCap.userScope(realm.getId(), user.getId()), s.maxPerHour, now)) {
-                return "user_hourly_cap";
-            }
-            if (!HourlyCap.tryTake(store, HourlyCap.realmScope(realm.getId()), s.maxPerRealmHour, now)) {
-                LOG.errorf("kwtSMS SMS code: realm hourly SMS ceiling (%d) reached, realm=%s; no more codes until "
-                        + "the hour ends (%d s)", s.maxPerRealmHour, realm.getName(), HourlyCap.secondsLeft(now));
-                return "realm_hourly_cap";
-            }
-            return null;
+            refused = HourlyCap.takeAll(store, scopes, max, now, taken);
         } catch (RuntimeException e) {
             LOG.warnf("kwtSMS SMS code: SMS counter unavailable, realm=%s user=%s (%s); failing closed",
                     realm.getName(), user.getId(), e.getClass().getSimpleName());
             return "counter_unavailable";
+        }
+        switch (refused) {
+            case -1:
+                return null;
+            case 0:
+                return "user_hourly_cap";
+            case 1:
+                LOG.warnf("kwtSMS SMS code: IP hourly SMS limit (%d) reached, realm=%s ip=%s", s.maxPerIpHour,
+                        realm.getName(), ip);
+                return "ip_hourly_cap";
+            default:
+                LOG.errorf("%s, realm=%s limit=%d; no more codes until the hour ends (%d s)", REALM_CEILING_LOG,
+                        realm.getName(), s.maxPerRealmHour, HourlyCap.secondsLeft(now));
+                return "realm_hourly_cap";
+        }
+    }
+
+    /**
+     * Release the slots of an SMS that was not sent; a store error only leaves them taken.
+     * 2026-11-09 23:53 +03 (onyx-fixes #1176, N2).
+     */
+    private static void giveBack(HourlyCap.Store store, List<String> taken, long now, RealmModel realm) {
+        int failed = HourlyCap.releaseAll(store, taken, now);
+        if (failed > 0) {
+            LOG.warnf("kwtSMS SMS code: %d SMS slot(s) could not be released, realm=%s; they free up when the hour "
+                    + "ends", failed, realm.getName());
+        }
+    }
+
+    /**
+     * The client address Keycloak sees. Behind a reverse proxy it is the proxy's address unless Keycloak's
+     * proxy-headers option is set. 2026-11-09 23:53 +03 (onyx-fixes #1176, N1).
+     */
+    private static String clientIp(AuthenticationFlowContext context) {
+        try {
+            return context.getConnection() == null ? null : context.getConnection().getRemoteAddr();
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 
@@ -255,6 +317,12 @@ public class SmsCodeAuthenticator implements Authenticator {
             public String read(String key) {
                 Map<String, String> m = p.get(key);
                 return m == null ? null : m.get("n");
+            }
+
+            // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): give back a slot of an SMS that was not sent.
+            @Override
+            public void release(String key) {
+                p.remove(key);
             }
 
             @Override

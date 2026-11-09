@@ -110,4 +110,20 @@ class SmsCodeTest {
         assertEquals(1, SmsCode.ttlMinutes(60));
         assertEquals(1, SmsCode.ttlMinutes(1));
     }
+
+    // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): a page reload never sends another SMS while a code is live or inside the resend wait.
+    @Test
+    void reloadKeepsTheCurrentCode() {
+        long sent = 1_000_000L;
+        int wait = 180;
+        long expires = sent + 300;
+        assertTrue(SmsCode.keepCurrentCode(true, sent + 1, expires, sent, wait));
+        assertTrue(SmsCode.keepCurrentCode(true, sent + 299, expires, sent, wait));
+        // expired but still inside the resend wait (wait longer than the lifetime): no new SMS
+        assertTrue(SmsCode.keepCurrentCode(true, sent + 400, sent + 300, sent, 600));
+        // expired and the wait is over: a new code may be sent
+        assertFalse(SmsCode.keepCurrentCode(true, sent + 300, expires, sent, wait));
+        // no code yet (first visit, or the last send failed): send
+        assertFalse(SmsCode.keepCurrentCode(false, sent + 1, expires, sent, wait));
+    }
 }

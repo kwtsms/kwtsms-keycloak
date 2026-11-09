@@ -93,6 +93,17 @@ public final class SmsCode {
         return nowSeconds >= expiresAtSeconds;
     }
 
+    /**
+     * True when the step must show the form again without sending: a code exists and is still live, or the resend
+     * wait is not over. A page reload must never send another SMS.
+     * 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): moved out of SmsCodeAuthenticator.authenticate so it is tested.
+     */
+    public static boolean keepCurrentCode(boolean hasCode, long nowSeconds, long expiresAtSeconds, long lastSentSeconds,
+                                          int waitSeconds) {
+        if (!hasCode) return false;
+        return !isExpired(nowSeconds, expiresAtSeconds) || resendWaitLeft(nowSeconds, lastSentSeconds, waitSeconds) > 0;
+    }
+
     /** Seconds the user still has to wait before a resend; 0 means a resend is allowed now. */
     public static long resendWaitLeft(long nowSeconds, long lastSentSeconds, int waitSeconds) {
         long left = lastSentSeconds + waitSeconds - nowSeconds;

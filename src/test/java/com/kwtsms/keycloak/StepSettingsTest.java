@@ -89,4 +89,19 @@ class StepSettingsTest {
         c.put(StepSettings.MAX_PER_REALM_HOUR, "lots");
         assertEquals(200, StepSettings.from(c).maxPerRealmHour);
     }
+
+    // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per-IP throttle, default 20, clamped 1 to 10000.
+    @Test
+    void ipThrottleDefaultAndClamp() {
+        assertEquals(20, StepSettings.from(null).maxPerIpHour);
+        Map<String, String> c = new HashMap<>();
+        c.put(StepSettings.MAX_PER_IP_HOUR, "0");
+        assertEquals(1, StepSettings.from(c).maxPerIpHour);
+        c.put(StepSettings.MAX_PER_IP_HOUR, "99999999");
+        assertEquals(10000, StepSettings.from(c).maxPerIpHour);
+        c.put(StepSettings.MAX_PER_IP_HOUR, "many");
+        assertEquals(20, StepSettings.from(c).maxPerIpHour);
+        c.put(StepSettings.MAX_PER_IP_HOUR, " 7 ");
+        assertEquals(7, StepSettings.from(c).maxPerIpHour);
+    }
 }

@@ -82,6 +82,11 @@ public class SmsCodeAuthenticatorFactory implements AuthenticatorFactory {
             .helpText("SMS codes the whole realm can send in one clock hour, all users together, 1 to 10000. "
                     + "When it is reached nobody gets a code until the hour ends; the server log says so.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_PER_REALM_HOUR)).add()
+            // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per-IP throttle so one address cannot use up the realm ceiling.
+            .property().name(StepSettings.MAX_PER_IP_HOUR).label("Max SMS per IP per hour")
+            .helpText("SMS codes one client IP address can get in one clock hour, all users together, 1 to 10000. "
+                    + "Behind a reverse proxy, set Keycloak's proxy-headers option so this is the real client IP.")
+            .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_PER_IP_HOUR)).add()
             .property().name(StepSettings.TEST_MODE).label("Test mode")
             .helpText("Warning: in test mode messages are NOT delivered, so users cannot log in. kwtSMS queues "
                     + "them and holds their credits until you delete them from the Sending Queue. For testing only.")

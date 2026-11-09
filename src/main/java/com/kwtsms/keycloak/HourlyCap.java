@@ -10,11 +10,18 @@
  *            edit, and its read-modify-write let parallel logins pass together. The store behind this class is
  *            Keycloak's SingleUseObjectProvider (see SmsCodeAuthenticator), which users cannot reach, works for
  *            federated users, and is shared by every node of a cluster.
+ *            2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): a third scope per client IP, so one address cannot
+ *            drain the realm ceiling; and slots taken for an SMS that was never sent can be released.
  * USAGE:     if (HourlyCap.tryTake(store, HourlyCap.userScope(realmId, userId), maxPerHour, now)) { send; }
+ *            int refused = HourlyCap.takeAll(store, scopes, max, now, taken);   // -1 = every slot taken
+ *            HourlyCap.releaseAll(store, taken, now);                          // the send failed
  *            Any exception from the store must be treated as "no slot" by the caller (fail closed).
  * DEPENDS:   Java 17 only (the Keycloak adapter lives in SmsCodeAuthenticator, so this stays unit-testable).
  */
 package com.kwtsms.keycloak;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public final class HourlyCap {
 
@@ -34,6 +41,9 @@ public final class HourlyCap {
 
         /** Write a hint value (best effort, may be lost or late). */
         void write(String key, String value, long lifespanSeconds);
+
+        /** Remove a claimed slot. 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): give back a slot not used. */
+        void release(String key);
     }
 
     private HourlyCap() {
@@ -45,6 +55,11 @@ public final class HourlyCap {
 
     public static String realmScope(String realmId) {
         return PREFIX + realmId + ":realm";
+    }
+
+    /** 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per client IP inside one realm. */
+    public static String ipScope(String realmId, String ip) {
+        return PREFIX + realmId + ":ip:" + (ip == null || ip.isEmpty() ? "unknown" : ip);
     }
 
     static long window(long nowSeconds) {
@@ -62,7 +77,15 @@ public final class HourlyCap {
      * slot under it was found taken), so starting at the hint never skips a free slot.
      */
     public static boolean tryTake(Store store, String scope, int max, long nowSeconds) {
-        if (max < 1) return false;
+        return take(store, scope, max, nowSeconds) != null;
+    }
+
+    /**
+     * Like {@link #tryTake}, but returns the key of the slot taken (for {@link #release}), or null when all are
+     * taken. 2026-11-09 23:53 +03 (onyx-fixes #1176, N2).
+     */
+    public static String take(Store store, String scope, int max, long nowSeconds) {
+        if (max < 1) return null;
         String base = scope + ":" + window(nowSeconds) + ":";
         long lifespan = secondsLeft(nowSeconds) + GRACE_SECONDS;
         int start = 0;
@@ -77,9 +100,76 @@ public final class HourlyCap {
         for (int i = start; i < max; i++) {
             if (store.claim(base + i, lifespan)) {
                 store.write(base + "next", Integer.toString(i + 1), lifespan);
-                return true;
+                return base + i;
             }
         }
-        return false;
+        return null;
+    }
+
+    /**
+     * Give back a slot from {@link #take}: remove it, then lower the hint to it so the next take finds it. A racing
+     * take may raise the hint again past the freed slot; that only skips a free slot (fewer SMS), never more.
+     * 2026-11-09 23:53 +03 (onyx-fixes #1176, N2).
+     */
+    public static void release(Store store, String slotKey, long nowSeconds) {
+        store.release(slotKey);
+        int cut = slotKey.lastIndexOf(':');
+        int slot;
+        try {
+            slot = Integer.parseInt(slotKey.substring(cut + 1));
+        } catch (NumberFormatException e) {
+            return;
+        }
+        String hintKey = slotKey.substring(0, cut + 1) + "next";
+        String hint = store.read(hintKey);
+        int current;
+        try {
+            current = hint == null ? Integer.MAX_VALUE : Integer.parseInt(hint);
+        } catch (NumberFormatException e) {
+            current = Integer.MAX_VALUE;
+        }
+        if (current > slot) store.write(hintKey, Integer.toString(slot), secondsLeft(nowSeconds) + GRACE_SECONDS);
+    }
+
+    /**
+     * Take one slot in each scope, in order. Returns -1 when every slot was taken (their keys are added to
+     * {@code taken}), or the index of the first scope that is full; then the slots this call took are released
+     * again, so a refused SMS uses no slot anywhere. 2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2).
+     */
+    public static int takeAll(Store store, String[] scopes, int[] max, long nowSeconds, List<String> taken) {
+        List<String> mine = new ArrayList<>();
+        try {
+            for (int i = 0; i < scopes.length; i++) {
+                String key = take(store, scopes[i], max[i], nowSeconds);
+                if (key == null) {
+                    releaseAll(store, mine, nowSeconds);
+                    return i;
+                }
+                mine.add(key);
+            }
+        } catch (RuntimeException e) {
+            releaseAll(store, mine, nowSeconds);
+            throw e;
+        }
+        taken.addAll(mine);
+        return -1;
+    }
+
+    /**
+     * Release every slot in {@code taken} and clear the list. Best effort: a store error leaves that slot taken
+     * (it expires with its hour), never throws. Returns how many could not be released.
+     * 2026-11-09 23:53 +03 (onyx-fixes #1176, N2).
+     */
+    public static int releaseAll(Store store, List<String> taken, long nowSeconds) {
+        int failed = 0;
+        for (String key : taken) {
+            try {
+                release(store, key, nowSeconds);
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        taken.clear();
+        return failed;
     }
 }

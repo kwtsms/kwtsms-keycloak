@@ -26,8 +26,8 @@ free API testing and credits that do not expire.
 
 **Security**
 - Random codes, kept only as a hash, single use, with a lifetime you set.
-- Limits: wrong-code attempts per login, resend wait, SMS per user per hour, SMS per realm per hour, allowed
-  country codes. The hourly counts are kept on the Keycloak server (shared by all nodes of a cluster), not on the
+- Limits: wrong-code attempts per login, resend wait, SMS per user per hour, SMS per IP address per hour, SMS per
+  realm per hour, allowed country codes. The hourly counts are kept on the Keycloak server (shared by all nodes of a cluster), not on the
   user, so they also work for LDAP and other read-only user stores and users cannot reset them.
 - One general message to the user for every sending problem; the reason is written to the server log and to
   Keycloak events, with the mobile number masked.
@@ -114,6 +114,7 @@ phone attribute on the registration form. For LDAP, map it read-only from the di
 | Resend wait (seconds) | 180 | 30 to 3600. |
 | Max attempts | 5 | Wrong codes per login before the login fails. |
 | Max SMS per user per hour | 5 | 1 to 50, per clock hour. |
+| Max SMS per IP per hour | 20 | 1 to 10000, all users on one client IP address together, per clock hour. |
 | Max SMS per realm per hour | 200 | 1 to 10000, all users together, per clock hour. |
 | Test mode | off | Messages are queued, not delivered. |
 | SMS template (English) | `Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.` | |
@@ -126,12 +127,26 @@ user a code. The limits keep this small:
 
 - **Per user:** after the hourly limit the user sees the general message and gets no more codes until the clock
   hour ends; they are never held back longer than that, and these stops do not count as failed logins.
-- **Per realm:** when the realm limit is reached nobody gets a code until the hour ends, and the server log says
-  so. Set it a little above your busiest real hour.
+- **Per IP address:** one client address gets at most this many codes per clock hour, for all users together, so
+  one attacker with many stolen passwords cannot use up the realm limit. If many real users share one address
+  (an office behind one public IP), raise it.
+- **Per realm:** when the realm limit is reached nobody gets a code until the hour ends. Set it a little above
+  your busiest real hour, and alert on this server log line (ERROR level, always the same text):
+
+  ```
+  kwtSMS SMS code: realm SMS ceiling reached
+  ```
+- **Failed sends** (a kwtSMS error or no answer) use no slot of any limit, so an outage does not lock users out.
+  Reloading the code page never sends another SMS while the code is valid or the resend wait is running.
 - **Wrong codes** count as failed logins. Turn on **Realm settings > Security Defenses > Brute Force Detection**
   so that password guessing and code guessing lock the account the way you choose.
 
 Turn on brute force detection in every realm that uses this step.
+
+**Behind a reverse proxy or load balancer**, Keycloak sees the proxy's address, so every user would share one IP
+limit. Start Keycloak with the `proxy-headers` option (`forwarded` or `xforwarded`, whichever your proxy sets) and
+`proxy-trusted-addresses` set to your proxy's addresses, and make the proxy overwrite these headers, not append to
+them. See [Configuring a reverse proxy](https://www.keycloak.org/server/reverseproxy).
 
 ### Test mode
 
@@ -157,8 +172,8 @@ settings.
 
 **A user says the code never came.** The user sees one general message on purpose. Look in the Keycloak server log
 for `kwtSMS SMS code` and in the login events for the `kwtsms_reason` and `kwtsms_error` details: no phone number,
-a number outside the allowed country codes, the hourly limit for the user (`user_hourly_cap`) or the realm
-(`realm_hourly_cap`), or a kwtSMS error code.
+a number outside the allowed country codes, the hourly limit for the user (`user_hourly_cap`), the IP address
+(`ip_hourly_cap`) or the realm (`realm_hourly_cap`), or a kwtSMS error code.
 
 ## Changelog
 

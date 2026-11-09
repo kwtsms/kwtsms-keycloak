@@ -7,6 +7,7 @@
  *            atomic putIfAbsent and expiry, including parallel callers and a failing store.
  * WHY:       2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3): the cap moved from a user attribute to Keycloak's
  *            SingleUseObjectProvider; its rules must hold without a running Keycloak; no network.
+ *            2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): per-IP throttle, takeAll in order, and slot release after a failed send.
  * USAGE:     ./gradlew test
  * DEPENDS:   JUnit 5.
  */
@@ -28,7 +29,8 @@ class HourlyCapTest {
     private static final long HOUR = 1_800_000_000L - Math.floorMod(1_800_000_000L, 3600L);
 
     /** Fake SingleUseObjectProvider: atomic claim, entries expire, a clock the test moves. */
-    static final class FakeStore implements HourlyCap.Store {
+    // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): no longer final, two tests override one method to fail.
+    static class FakeStore implements HourlyCap.Store {
         final ConcurrentHashMap<String, Long> claims = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, String> hints = new ConcurrentHashMap<>();
         final AtomicInteger claimCalls = new AtomicInteger();
@@ -61,6 +63,12 @@ class HourlyCapTest {
         @Override
         public void write(String key, String value, long lifespanSeconds) {
             hints.put(key, value);
+        }
+
+        // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2)
+        @Override
+        public void release(String key) {
+            claims.remove(key);
         }
     }
 
@@ -180,6 +188,10 @@ class HourlyCapTest {
             @Override
             public void write(String key, String value, long lifespanSeconds) {
             }
+
+            @Override
+            public void release(String key) {
+            }
         };
         assertThrows(IllegalStateException.class,
                 () -> HourlyCap.tryTake(broken, HourlyCap.userScope("r1", "u1"), 5, HOUR));
@@ -197,5 +209,142 @@ class HourlyCapTest {
         assertEquals(3600, HourlyCap.secondsLeft(HOUR));
         assertEquals(1, HourlyCap.secondsLeft(HOUR + 3599));
         assertEquals(3000, HourlyCap.secondsLeft(HOUR + 600));
+    }
+
+    // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): per-IP throttle and slot release.
+
+    private static String[] scopes(String user, String ip) {
+        return new String[] {HourlyCap.userScope("r1", user), HourlyCap.ipScope("r1", ip), HourlyCap.realmScope("r1")};
+    }
+
+    @Test
+    void ipScopesAreSeparateAndAMissingIpSharesOneBucket() {
+        assertNotEquals(HourlyCap.ipScope("r1", "10.0.0.1"), HourlyCap.ipScope("r1", "10.0.0.2"));
+        assertNotEquals(HourlyCap.ipScope("r1", "10.0.0.1"), HourlyCap.ipScope("r2", "10.0.0.1"));
+        assertEquals(HourlyCap.ipScope("r1", null), HourlyCap.ipScope("r1", ""));
+        assertFalse(HourlyCap.ipScope("r1", "::1").endsWith(".revoked"));
+    }
+
+    @Test
+    void oneIpWithManyStolenPasswordsCannotDrainTheRealm() {
+        FakeStore st = new FakeStore(HOUR);
+        int[] max = {5, 20, 200};
+        int sent = 0;
+        for (int user = 0; user < 300; user++) {
+            List<String> taken = new ArrayList<>();
+            if (HourlyCap.takeAll(st, scopes("u" + user, "203.0.113.9"), max, HOUR, taken) == -1) sent++;
+        }
+        assertEquals(20, sent);
+        // The realm still has 180 slots for everyone else.
+        int others = 0;
+        for (int user = 0; user < 300; user++) {
+            List<String> taken = new ArrayList<>();
+            if (HourlyCap.takeAll(st, scopes("v" + user, "198.51.100." + (user % 250)), max, HOUR, taken) == -1) {
+                others++;
+            }
+        }
+        assertEquals(180, others);
+    }
+
+    @Test
+    void takeAllReportsTheFullScopeAndKeepsNoSlotOfARefusedSms() {
+        FakeStore st = new FakeStore(HOUR);
+        int[] max = {5, 2, 200};
+        for (int i = 0; i < 2; i++) assertEquals(-1, HourlyCap.takeAll(st, scopes("u" + i, "ip"), max, HOUR,
+                new ArrayList<>()));
+        List<String> taken = new ArrayList<>();
+        assertEquals(1, HourlyCap.takeAll(st, scopes("u9", "ip"), max, HOUR, taken));
+        assertTrue(taken.isEmpty());
+        // u9's user slot was given back: all 5 are still free for u9 from another address.
+        for (int i = 0; i < 5; i++) assertTrue(HourlyCap.tryTake(st, HourlyCap.userScope("r1", "u9"), 5, HOUR));
+        // The realm slot was never taken: 2 of 200 used.
+        int realmLeft = 0;
+        while (HourlyCap.tryTake(st, HourlyCap.realmScope("r1"), 200, HOUR)) realmLeft++;
+        assertEquals(198, realmLeft);
+    }
+
+    @Test
+    void failedSendReleasesUserIpAndRealmSlots() {
+        FakeStore st = new FakeStore(HOUR);
+        int[] max = {1, 1, 1};
+        List<String> taken = new ArrayList<>();
+        assertEquals(-1, HourlyCap.takeAll(st, scopes("u1", "ip"), max, HOUR, taken));
+        assertEquals(3, taken.size());
+        assertEquals(0, HourlyCap.takeAll(st, scopes("u1", "ip"), max, HOUR, new ArrayList<>()));
+        // the send failed (kwtSMS down): give the slots back
+        assertEquals(0, HourlyCap.releaseAll(st, taken, HOUR));
+        assertTrue(taken.isEmpty());
+        assertTrue(st.claims.isEmpty());
+        assertEquals(-1, HourlyCap.takeAll(st, scopes("u1", "ip"), max, HOUR, new ArrayList<>()));
+    }
+
+    @Test
+    void manyFailedSendsNeverLockTheUserOut() {
+        FakeStore st = new FakeStore(HOUR);
+        int[] max = {5, 20, 200};
+        for (int attempt = 0; attempt < 500; attempt++) {
+            List<String> taken = new ArrayList<>();
+            assertEquals(-1, HourlyCap.takeAll(st, scopes("u1", "ip"), max, HOUR, taken), "attempt " + attempt);
+            HourlyCap.releaseAll(st, taken, HOUR);
+        }
+        for (int i = 0; i < 5; i++) assertTrue(HourlyCap.tryTake(st, HourlyCap.userScope("r1", "u1"), 5, HOUR));
+        assertFalse(HourlyCap.tryTake(st, HourlyCap.userScope("r1", "u1"), 5, HOUR));
+    }
+
+    @Test
+    void releasingALowSlotLowersTheHintSoItIsFoundAgain() {
+        FakeStore st = new FakeStore(HOUR);
+        String u = HourlyCap.userScope("r1", "u1");
+        String first = HourlyCap.take(st, u, 3, HOUR);
+        assertNotNull(HourlyCap.take(st, u, 3, HOUR));
+        assertNotNull(HourlyCap.take(st, u, 3, HOUR));
+        assertNull(HourlyCap.take(st, u, 3, HOUR));
+        HourlyCap.release(st, first, HOUR);
+        assertEquals(first, HourlyCap.take(st, u, 3, HOUR));
+        assertNull(HourlyCap.take(st, u, 3, HOUR));
+    }
+
+    @Test
+    void releaseNeverGivesMoreThanMax() {
+        FakeStore st = new FakeStore(HOUR);
+        String u = HourlyCap.userScope("r1", "u1");
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 4; i++) keys.add(HourlyCap.take(st, u, 4, HOUR));
+        HourlyCap.release(st, keys.get(3), HOUR);
+        HourlyCap.release(st, keys.get(1), HOUR);
+        assertNotNull(HourlyCap.take(st, u, 4, HOUR));
+        assertNotNull(HourlyCap.take(st, u, 4, HOUR));
+        assertNull(HourlyCap.take(st, u, 4, HOUR));
+        assertEquals(4, st.claims.size());
+    }
+
+    @Test
+    void releaseErrorsAreCountedNotThrown() {
+        FakeStore st = new FakeStore(HOUR) {
+            @Override
+            public void release(String key) {
+                throw new IllegalStateException("cache down");
+            }
+        };
+        List<String> taken = new ArrayList<>();
+        assertEquals(-1, HourlyCap.takeAll(st, scopes("u1", "ip"), new int[] {5, 20, 200}, HOUR, taken));
+        assertEquals(3, HourlyCap.releaseAll(st, taken, HOUR));
+        assertTrue(taken.isEmpty());
+    }
+
+    @Test
+    void storeErrorInTakeAllReleasesWhatWasTakenAndPropagates() {
+        FakeStore st = new FakeStore(HOUR) {
+            @Override
+            public boolean claim(String key, long lifespanSeconds) {
+                if (key.contains(":realm:")) throw new IllegalStateException("cache down");
+                return super.claim(key, lifespanSeconds);
+            }
+        };
+        List<String> taken = new ArrayList<>();
+        assertThrows(IllegalStateException.class,
+                () -> HourlyCap.takeAll(st, scopes("u1", "ip"), new int[] {5, 20, 200}, HOUR, taken));
+        assertTrue(taken.isEmpty());
+        assertTrue(st.claims.isEmpty());
     }
 }

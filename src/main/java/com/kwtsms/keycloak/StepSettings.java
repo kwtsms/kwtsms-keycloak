@@ -29,6 +29,8 @@ public final class StepSettings {
     public static final String MAX_PER_HOUR = "kwtsms.max.sms.per.hour";
     // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): realm-wide ceiling of SMS codes per clock hour, all users together.
     public static final String MAX_PER_REALM_HOUR = "kwtsms.max.sms.per.realm.hour";
+    // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): SMS codes per client IP per clock hour, all users together.
+    public static final String MAX_PER_IP_HOUR = "kwtsms.max.sms.per.ip.hour";
     public static final String TEST_MODE = "kwtsms.test.mode";
     public static final String TEMPLATE_EN = "kwtsms.template.en";
     public static final String TEMPLATE_AR = "kwtsms.template.ar";
@@ -43,6 +45,7 @@ public final class StepSettings {
     public static final int DEF_MAX_ATTEMPTS = 5;
     public static final int DEF_MAX_PER_HOUR = 5;
     public static final int DEF_MAX_PER_REALM_HOUR = 200; // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3)
+    public static final int DEF_MAX_PER_IP_HOUR = 20; // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1)
     public static final String DEF_TEMPLATE_EN = "Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.";
     public static final String DEF_TEMPLATE_AR = "رمز التحقق لدخول {realm}: {code}، صالح لمدة {ttl_minutes} دقائق.";
 
@@ -55,6 +58,7 @@ public final class StepSettings {
     public final int maxAttempts;
     public final int maxPerHour;
     public final int maxPerRealmHour; // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3)
+    public final int maxPerIpHour; // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1)
     public final boolean testMode;
     public final String templateEn;
     public final String templateAr;
@@ -71,6 +75,8 @@ public final class StepSettings {
         maxPerHour = number(c, MAX_PER_HOUR, DEF_MAX_PER_HOUR, 1, 50);
         // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3): 1 to 10000; a typo can lower the ceiling but never remove it.
         maxPerRealmHour = number(c, MAX_PER_REALM_HOUR, DEF_MAX_PER_REALM_HOUR, 1, 10000);
+        // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): 1 to 10000, like the realm ceiling.
+        maxPerIpHour = number(c, MAX_PER_IP_HOUR, DEF_MAX_PER_IP_HOUR, 1, 10000);
         testMode = "true".equalsIgnoreCase(text(c, TEST_MODE, "false"));
         templateEn = text(c, TEMPLATE_EN, DEF_TEMPLATE_EN);
         templateAr = text(c, TEMPLATE_AR, DEF_TEMPLATE_AR);
