@@ -217,7 +217,10 @@ public class SmsCodeAuthenticator implements Authenticator {
         if (!r.ok) {
             // 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): a kwtSMS outage must not use up the hour's slots
             // and lock users out.
-            giveBack(store, taken, now, realm);
+            // 2026-11-10 00:00 +03 (onyx-fixes #1176): give slots back only on a definite API refusal (ERRxxx: the
+            // SMS was not sent). A timeout or connection error (EXCEPTION_*) may still have delivered it, so those
+            // slots stay taken; otherwise retries during an outage would bypass the caps.
+            if (r.errorCode != null && r.errorCode.startsWith("ERR")) giveBack(store, taken, now, realm);
             context.getEvent().detail("kwtsms_error", r.errorCode);
             LOG.warnf("kwtSMS SMS code: send failed, realm=%s user=%s number=%s error=%s", realm.getName(),
                     user.getId(), PhoneRules.mask(number), r.errorCode);

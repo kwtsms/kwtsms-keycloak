@@ -19,7 +19,7 @@
   line to alert on: `kwtSMS SMS code: realm SMS ceiling reached`.
 - New limit per client IP address, Max SMS per IP per hour (default 20), so one address cannot use up the realm
   limit. README: set Keycloak's `proxy-headers` option behind a reverse proxy.
-- A failed send (kwtSMS error or no answer) no longer uses up hourly limits, so an outage cannot lock users out.
+- A send that kwtSMS refuses (an error reply) no longer uses up hourly limits. A timeout still counts, because the SMS may have gone out.
 - A user who reaches the hourly limit can log in again when the hour ends; sending problems no longer count as
   failed logins.
 - Allowed country codes need an explicit list; `*` (every country) is no longer accepted.

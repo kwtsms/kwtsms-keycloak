@@ -136,7 +136,7 @@ user a code. The limits keep this small:
   ```
   kwtSMS SMS code: realm SMS ceiling reached
   ```
-- **Failed sends** (a kwtSMS error or no answer) use no slot of any limit, so an outage does not lock users out.
+- **Refused sends** (a kwtSMS error reply) use no slot of any limit. A timeout or lost connection still counts, because the SMS may have been delivered.
   Reloading the code page never sends another SMS while the code is valid or the resend wait is running.
 - **Wrong codes** count as failed logins. Turn on **Realm settings > Security Defenses > Brute Force Detection**
   so that password guessing and code guessing lock the account the way you choose.
