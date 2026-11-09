@@ -86,6 +86,12 @@ public class SmsCodeAuthenticator implements Authenticator {
             context.challenge(form(context, s).createForm(TEMPLATE));
             return;
         }
+        // 2026-11-10 00:07 +03 (onyx-fixes #1176, N2 remainder): a failed send keeps the resend wait too, so a
+        // reload right after it shows the error again instead of trying another SMS.
+        if (SmsCode.holdAfterFailedSend(hash != null, now, longNote(auth, NOTE_SENT), s.resendWaitSeconds)) {
+            failClosed(context, "resend_wait_after_failure");
+            return;
+        }
         String reason = sendNewCode(context, s, now);
         if (reason != null) {
             failClosed(context, reason);
@@ -198,6 +204,9 @@ public class SmsCodeAuthenticator implements Authenticator {
         List<String> taken = new ArrayList<>();
         String capped = takeSlots(store, realm, user, clientIp(context), s, now, taken);
         if (capped != null) return capped;
+        // 2026-11-10 00:07 +03 (onyx-fixes #1176, N2 remainder): record the attempt time before the send, so a
+        // failed send also starts the resend wait (see SmsCode.holdAfterFailedSend in authenticate).
+        context.getAuthenticationSession().setAuthNote(NOTE_SENT, Long.toString(now));
 
         KwtsmsSender.Result r;
         String code;

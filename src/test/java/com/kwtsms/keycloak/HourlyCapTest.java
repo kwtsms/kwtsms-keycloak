@@ -8,6 +8,7 @@
  * WHY:       2026-11-09 23:37 +03 (onyx-fixes #1176, K1, K2, K3): the cap moved from a user attribute to Keycloak's
  *            SingleUseObjectProvider; its rules must hold without a running Keycloak; no network.
  *            2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): per-IP throttle, takeAll in order, and slot release after a failed send.
+ *            2026-11-10 00:07 +03 (onyx-fixes #1176, C3): IP key normalization (IPv6 /64, IPv4-mapped, unparseable).
  * USAGE:     ./gradlew test
  * DEPENDS:   JUnit 5.
  */
@@ -223,6 +224,31 @@ class HourlyCapTest {
         assertNotEquals(HourlyCap.ipScope("r1", "10.0.0.1"), HourlyCap.ipScope("r2", "10.0.0.1"));
         assertEquals(HourlyCap.ipScope("r1", null), HourlyCap.ipScope("r1", ""));
         assertFalse(HourlyCap.ipScope("r1", "::1").endsWith(".revoked"));
+    }
+
+    // 2026-11-10 00:07 +03 (onyx-fixes #1176, C3): IPv4 as is, IPv6 by /64, IPv4-mapped as IPv4, junk as "unknown".
+    @Test
+    void ipKeyNormalizesAddresses() {
+        assertEquals("203.0.113.7", HourlyCap.ipKey("203.0.113.7"));
+        assertEquals("203.0.113.7", HourlyCap.ipKey(" 203.0.113.7 "));
+        assertEquals("2001:db8:1:2::/64", HourlyCap.ipKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd"));
+        assertEquals(HourlyCap.ipKey("2001:db8:1:2::1"), HourlyCap.ipKey("2001:0db8:0001:0002:ffff:0:0:9"));
+        assertEquals("2001:db8:1:2::/64", HourlyCap.ipKey("[2001:db8:1:2::1]"));
+        assertEquals("2001:db8:1:2::/64", HourlyCap.ipKey("2001:db8:1:2::1%eth0"));
+        assertNotEquals(HourlyCap.ipKey("2001:db8:1:2::1"), HourlyCap.ipKey("2001:db8:1:3::1"));
+        assertEquals("0:0:0:0::/64", HourlyCap.ipKey("::1"));
+        assertEquals("203.0.113.7", HourlyCap.ipKey("::ffff:203.0.113.7"));
+        assertEquals("203.0.113.7", HourlyCap.ipKey("::ffff:cb00:7107"));
+        assertEquals("unknown", HourlyCap.ipKey(null));
+        assertEquals("unknown", HourlyCap.ipKey(""));
+        assertEquals("unknown", HourlyCap.ipKey("unknown"));
+        assertEquals("unknown", HourlyCap.ipKey("example.com"));
+        assertEquals("unknown", HourlyCap.ipKey("256.1.1.1"));
+        assertEquals("unknown", HourlyCap.ipKey("127.1"));
+        assertEquals("unknown", HourlyCap.ipKey("2001:db8::1::2"));
+        assertEquals("unknown", HourlyCap.ipKey("12345::1"));
+        assertEquals("unknown", HourlyCap.ipKey("2001:db8::zz"));
+        assertEquals(HourlyCap.ipScope("r1", "2001:db8:1:2::5"), HourlyCap.ipScope("r1", "2001:db8:1:2::6"));
     }
 
     @Test

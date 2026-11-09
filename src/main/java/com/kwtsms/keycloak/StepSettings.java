@@ -45,7 +45,7 @@ public final class StepSettings {
     public static final int DEF_MAX_ATTEMPTS = 5;
     public static final int DEF_MAX_PER_HOUR = 5;
     public static final int DEF_MAX_PER_REALM_HOUR = 200; // 2026-11-09 23:37 +03 (onyx-fixes #1176, K3)
-    public static final int DEF_MAX_PER_IP_HOUR = 20; // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1)
+    public static final int DEF_MAX_PER_IP_HOUR = 100; // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1); 2026-11-10 00:07 +03 (C1): 20 -> 100, mobile CGNAT shares one IP
     public static final String DEF_TEMPLATE_EN = "Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.";
     public static final String DEF_TEMPLATE_AR = "رمز التحقق لدخول {realm}: {code}، صالح لمدة {ttl_minutes} دقائق.";
 

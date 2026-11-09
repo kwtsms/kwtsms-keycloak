@@ -94,6 +94,15 @@ public final class SmsCode {
     }
 
     /**
+     * True when the last send attempt failed (no code is held) and its resend wait is still running: a page
+     * reload must not try another SMS until the wait is over.
+     * 2026-11-10 00:07 +03 (onyx-fixes #1176, N2 remainder).
+     */
+    public static boolean holdAfterFailedSend(boolean hasCode, long nowSeconds, long lastSentSeconds, int waitSeconds) {
+        return !hasCode && lastSentSeconds > 0 && resendWaitLeft(nowSeconds, lastSentSeconds, waitSeconds) > 0;
+    }
+
+    /**
      * True when the step must show the form again without sending: a code exists and is still live, or the resend
      * wait is not over. A page reload must never send another SMS.
      * 2026-11-09 23:53 +03 (onyx-fixes #1176, N2): moved out of SmsCodeAuthenticator.authenticate so it is tested.

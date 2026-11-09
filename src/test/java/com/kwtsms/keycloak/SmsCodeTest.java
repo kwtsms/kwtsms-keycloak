@@ -126,4 +126,18 @@ class SmsCodeTest {
         // no code yet (first visit, or the last send failed): send
         assertFalse(SmsCode.keepCurrentCode(false, sent + 1, expires, sent, wait));
     }
+
+    // 2026-11-10 00:07 +03 (onyx-fixes #1176, N2 remainder): a failed send keeps the resend wait, a reload inside it does not try again.
+    @Test
+    void failedSendKeepsTheResendWait() {
+        long sent = 1_000_000L;
+        int wait = 180;
+        assertTrue(SmsCode.holdAfterFailedSend(false, sent, sent, wait));
+        assertTrue(SmsCode.holdAfterFailedSend(false, sent + 179, sent, wait));
+        assertFalse(SmsCode.holdAfterFailedSend(false, sent + 180, sent, wait));
+        // first visit: no attempt recorded yet
+        assertFalse(SmsCode.holdAfterFailedSend(false, sent, 0, wait));
+        // a code is held: keepCurrentCode decides, not this rule
+        assertFalse(SmsCode.holdAfterFailedSend(true, sent + 1, sent, wait));
+    }
 }

@@ -114,7 +114,7 @@ phone attribute on the registration form. For LDAP, map it read-only from the di
 | Resend wait (seconds) | 180 | 30 to 3600. |
 | Max attempts | 5 | Wrong codes per login before the login fails. |
 | Max SMS per user per hour | 5 | 1 to 50, per clock hour. |
-| Max SMS per IP per hour | 20 | 1 to 10000, all users on one client IP address together, per clock hour. |
+| Max SMS per IP per hour | 100 | 1 to 10000, all users on one client IP address together, per clock hour. IPv6 clients count by their /64 network. See [Mobile networks (CGNAT)](#mobile-networks-cgnat). |
 | Max SMS per realm per hour | 200 | 1 to 10000, all users together, per clock hour. |
 | Test mode | off | Messages are queued, not delivered. |
 | SMS template (English) | `Your {realm} SMS code is {code}. It expires in {ttl_minutes} minutes.` | |
@@ -128,8 +128,10 @@ user a code. The limits keep this small:
 - **Per user:** after the hourly limit the user sees the general message and gets no more codes until the clock
   hour ends; they are never held back longer than that, and these stops do not count as failed logins.
 - **Per IP address:** one client address gets at most this many codes per clock hour, for all users together, so
-  one attacker with many stolen passwords cannot use up the realm limit. If many real users share one address
-  (an office behind one public IP), raise it.
+  one attacker with many stolen passwords cannot use up the realm limit. IPv6 addresses count by their /64
+  network, because one site can switch between the addresses inside it. If many real users share one address,
+  raise it (see [Mobile networks (CGNAT)](#mobile-networks-cgnat)). Behind a reverse proxy, set up proxy headers
+  first (see [Behind a reverse proxy](#behind-a-reverse-proxy-or-load-balancer)).
 - **Per realm:** when the realm limit is reached nobody gets a code until the hour ends. Set it a little above
   your busiest real hour, and alert on this server log line (ERROR level, always the same text):
 
@@ -137,14 +139,23 @@ user a code. The limits keep this small:
   kwtSMS SMS code: realm SMS ceiling reached
   ```
 - **Refused sends** (a kwtSMS error reply) use no slot of any limit. A timeout or lost connection still counts, because the SMS may have been delivered.
-  Reloading the code page never sends another SMS while the code is valid or the resend wait is running.
+  Reloading the code page never sends another SMS while the code is valid or the resend wait is running, and a
+  failed send starts the resend wait too.
 - **Wrong codes** count as failed logins. Turn on **Realm settings > Security Defenses > Brute Force Detection**
   so that password guessing and code guessing lock the account the way you choose.
 
 Turn on brute force detection in every realm that uses this step.
 
-**Behind a reverse proxy or load balancer**, Keycloak sees the proxy's address, so every user would share one IP
-limit. Start Keycloak with the `proxy-headers` option (`forwarded` or `xforwarded`, whichever your proxy sets) and
+### Mobile networks (CGNAT)
+
+Mobile carriers put many customers behind one public address (carrier-grade NAT), so on mobile data many users
+share one IP limit. For a public consumer realm raise Max SMS per IP per hour, for example to 200 to 500, and rely
+on the per-user limit and the realm limit. For staff or office realms a lower value is fine.
+
+### Behind a reverse proxy or load balancer
+
+Keycloak sees the proxy's address, so every user would share one IP limit. If proxy headers are not set up, the
+whole realm shares one per-IP bucket and the per-IP limit stops everyone at once. Start Keycloak with the `proxy-headers` option (`forwarded` or `xforwarded`, whichever your proxy sets) and
 `proxy-trusted-addresses` set to your proxy's addresses, and make the proxy overwrite these headers, not append to
 them. See [Configuring a reverse proxy](https://www.keycloak.org/server/reverseproxy).
 

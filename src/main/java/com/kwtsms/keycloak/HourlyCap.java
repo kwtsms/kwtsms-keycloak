@@ -12,6 +12,7 @@
  *            federated users, and is shared by every node of a cluster.
  *            2026-11-09 23:53 +03 (onyx-fixes #1176, N1, N2): a third scope per client IP, so one address cannot
  *            drain the realm ceiling; and slots taken for an SMS that was never sent can be released.
+ *            2026-11-10 00:07 +03 (onyx-fixes #1176, C3): the IP key is normalized (IPv6 by its /64 prefix).
  * USAGE:     if (HourlyCap.tryTake(store, HourlyCap.userScope(realmId, userId), maxPerHour, now)) { send; }
  *            int refused = HourlyCap.takeAll(store, scopes, max, now, taken);   // -1 = every slot taken
  *            HourlyCap.releaseAll(store, taken, now);                          // the send failed
@@ -57,9 +58,48 @@ public final class HourlyCap {
         return PREFIX + realmId + ":realm";
     }
 
-    /** 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per client IP inside one realm. */
+    /**
+     * 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per client IP inside one realm.
+     * 2026-11-10 00:07 +03 (onyx-fixes #1176, C3): keyed by {@link #ipKey}, so an IPv6 client shares one bucket
+     * with its whole /64.
+     */
     public static String ipScope(String realmId, String ip) {
-        return PREFIX + realmId + ":ip:" + (ip == null || ip.isEmpty() ? "unknown" : ip);
+        return PREFIX + realmId + ":ip:" + ipKey(ip);
+    }
+
+    private static final java.util.regex.Pattern IPV4 =
+            java.util.regex.Pattern.compile("(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}");
+    private static final java.util.regex.Pattern IPV6_CHARS = java.util.regex.Pattern.compile("[0-9A-Fa-f:.]+");
+
+    /**
+     * The bucket key of a client address: IPv4 as is; IPv6 as its /64 prefix (one end site usually holds a whole
+     * /64, so an attacker could rotate addresses inside it); IPv4-mapped IPv6 (::ffff:a.b.c.d) as the IPv4
+     * address; missing or unparseable as "unknown". Only literals are parsed, never a DNS lookup: anything that
+     * is not dotted-quad IPv4 or hex/colon IPv6 text is "unknown" before InetAddress sees it.
+     * 2026-11-10 00:07 +03 (onyx-fixes #1176, C3).
+     */
+    static String ipKey(String ip) {
+        if (ip == null) return "unknown";
+        String t = ip.trim();
+        if (IPV4.matcher(t).matches()) return t;
+        if (t.startsWith("[") && t.endsWith("]")) t = t.substring(1, t.length() - 1);
+        int zone = t.indexOf('%');
+        if (zone >= 0) t = t.substring(0, zone);
+        if (t.indexOf(':') < 0 || !IPV6_CHARS.matcher(t).matches()) return "unknown";
+        java.net.InetAddress a;
+        try {
+            a = java.net.InetAddress.getByName(t); // a literal with ':' is parsed, never looked up
+        } catch (java.net.UnknownHostException | RuntimeException e) {
+            return "unknown";
+        }
+        byte[] b = a.getAddress();
+        if (b.length == 4) return a.getHostAddress(); // Java returns ::ffff:a.b.c.d as an Inet4Address
+        if (b.length != 16) return "unknown";
+        StringBuilder k = new StringBuilder();
+        for (int i = 0; i < 8; i += 2) {
+            k.append(Integer.toHexString(((b[i] & 0xff) << 8) | (b[i + 1] & 0xff))).append(':');
+        }
+        return k.append(":/64").toString();
     }
 
     static long window(long nowSeconds) {

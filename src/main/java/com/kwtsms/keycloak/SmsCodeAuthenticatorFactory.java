@@ -85,7 +85,10 @@ public class SmsCodeAuthenticatorFactory implements AuthenticatorFactory {
             // 2026-11-09 23:53 +03 (onyx-fixes #1176, N1): per-IP throttle so one address cannot use up the realm ceiling.
             .property().name(StepSettings.MAX_PER_IP_HOUR).label("Max SMS per IP per hour")
             .helpText("SMS codes one client IP address can get in one clock hour, all users together, 1 to 10000. "
-                    + "Behind a reverse proxy, set Keycloak's proxy-headers option so this is the real client IP.")
+                    + "Behind a reverse proxy, set Keycloak's proxy-headers option so this is the real client IP. "
+                    // 2026-11-10 00:07 +03 (onyx-fixes #1176, C1, C3): CGNAT hint and the IPv6 /64 key.
+                    + "Mobile networks put many customers on one address: for a public consumer realm use 200 to 500. "
+                    + "IPv6 clients are counted by their /64 network.")
             .type(ProviderConfigProperty.STRING_TYPE).defaultValue(Integer.toString(StepSettings.DEF_MAX_PER_IP_HOUR)).add()
             .property().name(StepSettings.TEST_MODE).label("Test mode")
             .helpText("Warning: in test mode messages are NOT delivered, so users cannot log in. kwtSMS queues "
