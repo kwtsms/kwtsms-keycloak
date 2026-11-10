@@ -36,7 +36,7 @@ class MessageTemplateTest {
     @Test
     void rendersDefaultArabic() {
         String s = MessageTemplate.render(StepSettings.DEF_TEMPLATE_AR, "042917", 5, "Acme");
-        assertEquals("رمز التحقق لدخول Acme: 042917، صالح لمدة 5 دقائق.", s);
+        assertEquals("رمز التحقق لدخول Acme: 042917. مدة الصلاحية (بالدقائق): 5", s);
     }
 
     @Test
