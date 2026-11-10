@@ -12,7 +12,7 @@
 Add an SMS code to your Keycloak logins: after the password, Keycloak sends a one-time code by SMS through kwtSMS,
 the Kuwaiti SMS gateway, and the user types it in. Free and open source.
 
-kwtSMS delivers to Zain, Ooredoo, stc and Virgin in Kuwait and to more than 200 countries, with your own Sender ID,
+kwtSMS delivers to Zain, Ooredoo, STC and Virgin in Kuwait and to more than 200 countries, with your own Sender ID,
 free API testing and credits that do not expire.
 
 ## Features
