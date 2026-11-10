@@ -97,9 +97,13 @@ phone attribute on the registration form. For LDAP, map it read-only from the di
 1. Go to **Authentication**, open the **browser** flow and choose **Duplicate**.
 2. In the copy, find the step group that holds **Username Password Form** and click **Add step** there.
 3. Choose **kwtSMS SMS code**, place it after **Username Password Form** and set it to **Required** (the step
-   offers only Required and Disabled).
+   offers only Required and Disabled). It must come after the password step: placed first, it has no user yet and
+   every login stops with "Invalid username or password" before the password page shows.
 4. Click the gear icon of the new step and fill in the settings (below). The Sender ID is required.
 5. Use **Bind flow** on your copy and choose **Browser flow**.
+
+The extension never writes the kwtSMS request log of the Java library (that log would hold the login code and
+the phone number in plain text); keep it that way if you build your own version.
 
 ### 4. Settings
 
