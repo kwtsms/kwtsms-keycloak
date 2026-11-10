@@ -28,4 +28,6 @@ jobs:
         run: |
           V="${GITHUB_REF_NAME#v}"
           awk "/^## \\[${V}\\]/{f=1; next} /^## \\[/{if(f) exit} f{print}" CHANGELOG.md > /tmp/notes.md
+          # 2026-11-10 17:4x +03: SHA-256 of the jar in the notes so admins can verify the download (Onyx #1176 c5756)
+          printf '\nSHA-256 (kwtsms-keycloak-%s.jar): `%s`\n' "$V" "$(sha256sum "build/libs/kwtsms-keycloak-$V.jar" | cut -d' ' -f1)" >> /tmp/notes.md
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md "build/libs/kwtsms-keycloak-$V.jar"
