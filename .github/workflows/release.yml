@@ -1,0 +1,31 @@
+# FILE:    .github/workflows/release.yml
+# CREATED: 2026-11-10 11:38 +03
+# WHAT:    On a v* tag: build and test, check the jar version equals the tag, publish a GitHub release with the jar and
+#          the CHANGELOG section as notes.
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: ./gradlew build --no-daemon
+      - name: Jar version matches the tag
+        run: test -f "build/libs/kwtsms-keycloak-${GITHUB_REF_NAME#v}.jar"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          awk "/^## \\[${V}\\]/{f=1; next} /^## \\[/{if(f) exit} f{print}" CHANGELOG.md > /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md "build/libs/kwtsms-keycloak-$V.jar"
