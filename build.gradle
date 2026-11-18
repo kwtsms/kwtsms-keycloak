@@ -43,7 +43,7 @@ dependencies {
     // kwtsms-java has no runtime dependencies; it is bundled and relocated by shadowJar.
     implementation 'com.github.boxlinknet:kwtsms-java:0.5.0'
 
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
